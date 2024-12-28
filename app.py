@@ -17,18 +17,6 @@ CHAT_UPDATE_INTERVAL_SEC = 1
 load_dotenv()
 print("START")
 
-
-auth_token = os.getenv("MOMENTO_API_KEY")
-print(f"MOMENTO_API_KEY: {auth_token}")
-
-try:
-    credentials = CredentialProvider.from_string(auth_token)
-    print("Auth token is valid.")
-except Exception as e:
-    print(f"Invalid auth token: {e}")
-    print(f"Exception details: {e.__class__.__name__}, {e.args}")
-
-
 app  = App(
     signing_secret=os.environ["SLACK_SIGNING_SECRET"],
     token=os.environ.get("SLACK_BOT_TOKEN"),
@@ -38,7 +26,11 @@ app  = App(
 bot_token = os.getenv("SLACK_BOT_TOKEN")
 app_token = os.getenv("SLACK_APP_TOKEN")
 
-@app.event("app_mention")
+def just_ack(ack):
+    ack()
+
+
+# @app.event("app_mention")
 def handle_mention(event, say):
     print(f"slackのevent: {event}")
     channel = event["channel"]
@@ -78,6 +70,8 @@ def handle_mention(event, say):
 
     ai_message = llm(messages)
     history.add_message(ai_message)
+
+app.event("app_mention")(ack=just_ack, lazy=[handle_mention])
 
 class SlackStreamingCallbackHandler(BaseCallbackHandler):
     last_send_time = time.time()
