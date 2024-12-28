@@ -6,13 +6,28 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from langchain.chat_models import ChatOpenAI
 from langchain.callbacks.base import BaseCallbackHandler
-from langchain.schema import LLMResult
+from langchain.schema import LLMResult, HumanMessage, SystemMessage
 from typing import Any
+from datetime import timedelta
+from langchain.memory import MomentoChatMessageHistory
+from momento.auth import CredentialProvider
 
 CHAT_UPDATE_INTERVAL_SEC = 1
 
 load_dotenv()
 print("START")
+
+
+auth_token = os.getenv("MOMENTO_API_KEY")
+print(f"MOMENTO_API_KEY: {auth_token}")
+
+try:
+    credentials = CredentialProvider.from_string(auth_token)
+    print("Auth token is valid.")
+except Exception as e:
+    print(f"Invalid auth token: {e}")
+    print(f"Exception details: {e.__class__.__name__}, {e.args}")
+
 
 app  = App(
     signing_secret=os.environ["SLACK_SIGNING_SECRET"],
@@ -25,12 +40,32 @@ app_token = os.getenv("SLACK_APP_TOKEN")
 
 @app.event("app_mention")
 def handle_mention(event, say):
+    print(f"slackのevent: {event}")
     channel = event["channel"]
     thread_ts = event["ts"]
     message = re.sub("<@>", "", event["text"])
 
+    id_ts = event["ts"]
+
+    if "thread_ts" in event:
+        id_ts = event["thread_ts"]
+
     result = say("\n\nTyping...", thread_ts=thread_ts)
     ts = result["ts"]
+
+
+    history = MomentoChatMessageHistory.from_client_params(
+        id_ts,
+        os.environ["MOMENTO_CACHE"],
+        timedelta(hours=int(os.environ["MOMENTO_TTL"]))
+    )
+    print(f"history: {history}")
+
+    messages = [SystemMessage(content="You are a good assistant.")]
+    messages.extend(history.messages)
+    messages.append(HumanMessage(content=message))
+
+    history.add_user_message(message)
 
     callback = SlackStreamingCallbackHandler(channel=channel, ts=ts)
 
@@ -41,10 +76,8 @@ def handle_mention(event, say):
         callbacks=[callback]
     )
 
-    llm.predict(message)
-
-    response = llm.predict(message)
-    say(text=response, thread_ts=thread_ts)
+    ai_message = llm(messages)
+    history.add_message(ai_message)
 
 class SlackStreamingCallbackHandler(BaseCallbackHandler):
     last_send_time = time.time()
@@ -71,4 +104,3 @@ class SlackStreamingCallbackHandler(BaseCallbackHandler):
 
 if __name__ == "__main__":
     SocketModeHandler(app, os.environ.get("SLACK_APP_TOKEN")).start()
-
