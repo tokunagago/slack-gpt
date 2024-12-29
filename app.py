@@ -11,17 +11,40 @@ from typing import Any
 from datetime import timedelta
 from langchain.memory import MomentoChatMessageHistory
 from momento.auth import CredentialProvider
+import json
+import logging
+from slack_bolt.adapter.aws_lambda import SlackRequestHandler
 
 CHAT_UPDATE_INTERVAL_SEC = 1
 
 load_dotenv()
 print("START")
 
+# ログ
+SlackRequestHandler.clear_all_log_handlers()
+logging.basicConfig(
+    format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
 app  = App(
     signing_secret=os.environ["SLACK_SIGNING_SECRET"],
     token=os.environ.get("SLACK_BOT_TOKEN"),
     process_before_response=True
 )
+
+def handler(event, context):
+    logger.info("handelr called")
+    header = event["headers"]
+    logger.info(json.dumps(header))
+
+    if "x-slack-retry-num" in header:
+        logger.info("SKIP > x-slack-retry: %s", header["x-slack-retry-num"])
+        return 200
+
+    # AWS Lambdaのリクエスト情報をappが処理できるように変換するアダプター
+    slack_handler = SlackRequestHandler(app=app)
+    return slack_handler.handle(event, context)
 
 bot_token = os.getenv("SLACK_BOT_TOKEN")
 app_token = os.getenv("SLACK_APP_TOKEN")
@@ -80,12 +103,14 @@ class SlackStreamingCallbackHandler(BaseCallbackHandler):
     def __init__(self, channel, ts):
         self.channel = channel
         self.ts = ts
+        self.interval = CHAT_UPDATE_INTERVAL_SEC
+        self.update_count = 0
 
     def on_llm_new_token(self, token: str, **kwargs) -> None:
         self.message += token
 
         now = time.time()
-        if now - self.last_send_time > CHAT_UPDATE_INTERVAL_SEC:
+        if now - self.last_send_time > self.interval:
             self.last_send_time = now
             app.client.chat_update(
                 channel=self.channel, ts=self.ts, text=f"{self.message}..."
